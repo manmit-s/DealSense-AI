@@ -1,0 +1,82 @@
+import NextAuth, { type DefaultSession } from 'next-auth';
+import CredentialsProvider from 'next-auth/providers/credentials';
+
+declare module 'next-auth' {
+  interface Session {
+    user: {
+      id: string;
+      org_id: string;
+      role: string;
+      accessToken: string;
+    } & DefaultSession['user'];
+  }
+}
+
+export const { handlers, auth, signIn, signOut } = NextAuth({
+  pages: {
+    signIn: '/auth/login',
+  },
+  providers: [
+    CredentialsProvider({
+      name: 'Credentials',
+      credentials: {
+        email: { label: 'Email', type: 'email' },
+        password: { label: 'Password', type: 'password' },
+      },
+      async authorize(credentials) {
+        if (!credentials?.email || !credentials?.password) return null;
+
+        try {
+          const res = await fetch(`${process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000'}/api/auth/login`, {
+            method: 'POST',
+            body: JSON.stringify({
+              email: credentials.email,
+              password: credentials.password,
+            }),
+            headers: { 'Content-Type': 'application/json' },
+          });
+
+          const data = await res.json();
+
+          if (res.ok && data.user) {
+            return {
+              id: data.user.id,
+              name: data.user.name,
+              email: data.user.email,
+              org_id: data.user.org_id,
+              role: data.user.role,
+              accessToken: data.access_token,
+            };
+          }
+          return null;
+        } catch (error) {
+          console.error("Auth error:", error);
+          return null;
+        }
+      },
+    }),
+  ],
+  callbacks: {
+    async jwt({ token, user }) {
+      if (user) {
+        token.id = user.id;
+        token.org_id = user.org_id;
+        token.role = user.role;
+        token.accessToken = user.accessToken;
+      }
+      return token;
+    },
+    async session({ session, token }) {
+      if (token && session.user) {
+        session.user.id = token.id as string;
+        session.user.org_id = token.org_id as string;
+        session.user.role = token.role as string;
+        session.user.accessToken = token.accessToken as string;
+      }
+      return session;
+    },
+  },
+  session: {
+    strategy: 'jwt',
+  },
+});

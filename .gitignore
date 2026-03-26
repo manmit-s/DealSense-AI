@@ -1,0 +1,25 @@
+# Dependencies
+node_modules
+.next/
+out/
+build/
+
+# IDE / OS
+.vscode/
+.idea/
+.DS_Store
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+venv/
+.venv/
+.pytest_cache/
+
+# Environment Variables
+.env
+.env.local
+.env.development.local
+.env.test.local
+.env.production.local
