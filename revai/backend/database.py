@@ -1,9 +1,7 @@
 import os
 from sqlalchemy.ext.asyncio import create_async_engine, AsyncSession
 from sqlalchemy.orm import sessionmaker
-from dotenv import load_load_dotenv
 
-load_dotenv = False
 try:
     from dotenv import load_dotenv
     load_dotenv()

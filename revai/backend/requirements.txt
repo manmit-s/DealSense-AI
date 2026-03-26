@@ -6,6 +6,8 @@ psycopg2-binary
 asyncpg
 redis
 python-dotenv
-passlib[bcrypt]
+passlib
+bcrypt==3.2.2
 python-jose[cryptography]
 pydantic[email]
+httpx

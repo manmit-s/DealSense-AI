@@ -7,7 +7,7 @@ from passlib.context import CryptContext
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.future import select
 from sqlalchemy.orm import selectinload
-from .database import get_db
+from database import get_db
 from models.user import User
 
 try:

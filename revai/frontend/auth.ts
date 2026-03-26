@@ -1,6 +1,17 @@
 import NextAuth, { type DefaultSession } from 'next-auth';
 import CredentialsProvider from 'next-auth/providers/credentials';
 
+const getAuthApiCandidates = () => {
+  const candidates = [
+    process.env.BACKEND_INTERNAL_URL,
+    process.env.NEXT_PUBLIC_API_URL,
+    'http://backend:8000',
+    'http://localhost:8000',
+  ].filter(Boolean) as string[];
+
+  return [...new Set(candidates)];
+};
+
 declare module 'next-auth' {
   interface Session {
     user: {
@@ -27,27 +38,38 @@ export const { handlers, auth, signIn, signOut } = NextAuth({
         if (!credentials?.email || !credentials?.password) return null;
 
         try {
-          const res = await fetch(`${process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000'}/api/auth/login`, {
-            method: 'POST',
-            body: JSON.stringify({
-              email: credentials.email,
-              password: credentials.password,
-            }),
-            headers: { 'Content-Type': 'application/json' },
-          });
+          for (const baseUrl of getAuthApiCandidates()) {
+            try {
+              const res = await fetch(`${baseUrl}/api/auth/login`, {
+                method: 'POST',
+                body: JSON.stringify({
+                  email: credentials.email,
+                  password: credentials.password,
+                }),
+                headers: { 'Content-Type': 'application/json' },
+              });
 
-          const data = await res.json();
+              const data = await res.json().catch(() => null);
 
-          if (res.ok && data.user) {
-            return {
-              id: data.user.id,
-              name: data.user.name,
-              email: data.user.email,
-              org_id: data.user.org_id,
-              role: data.user.role,
-              accessToken: data.access_token,
-            };
+              if (res.ok && data?.user) {
+                return {
+                  id: data.user.id,
+                  name: data.user.name,
+                  email: data.user.email,
+                  org_id: data.user.org_id,
+                  role: data.user.role,
+                  accessToken: data.access_token,
+                };
+              }
+
+              if (res.status === 400 || res.status === 401) {
+                return null;
+              }
+            } catch {
+              continue;
+            }
           }
+
           return null;
         } catch (error) {
           console.error("Auth error:", error);
@@ -57,6 +79,13 @@ export const { handlers, auth, signIn, signOut } = NextAuth({
     }),
   ],
   callbacks: {
+    authorized({ auth, request: { nextUrl } }) {
+      if (nextUrl.pathname.startsWith('/dashboard')) {
+        return !!auth?.user;
+      }
+
+      return true;
+    },
     async jwt({ token, user }) {
       if (user) {
         token.id = user.id;
