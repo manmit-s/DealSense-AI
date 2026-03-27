@@ -11,6 +11,10 @@ export default function LoginPage() {
   const [isLoading, setIsLoading] = useState(false);
   const router = useRouter();
 
+  const handleBypass = () => {
+    router.push('/dashboard/overview?bypass=1');
+  };
+
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     setIsLoading(true);
@@ -77,6 +81,13 @@ export default function LoginPage() {
             className="w-full bg-cyan text-base font-bold py-2 px-4 rounded-md hover:bg-cyan/90 transition-colors disabled:opacity-50"
           >
             {isLoading ? 'Authenticating...' : 'Enter System'}
+          </button>
+          <button
+            type="button"
+            onClick={handleBypass}
+            className="w-full bg-elevated border border-border text-white font-semibold py-2 px-4 rounded-md hover:border-cyan hover:text-cyan transition-colors"
+          >
+            Quick Test Bypass
           </button>
         </form>
       </div>
