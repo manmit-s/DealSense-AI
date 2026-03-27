@@ -22,9 +22,12 @@ app.include_router(deals.router)
 
 @app.on_event("startup")
 async def startup_event():
-    # In production, use Alembic, but here creating tables if not exists
-    async with engine.begin() as conn:
-        await conn.run_sync(Base.metadata.create_all)
+    # Allow API boot without Docker DB so health routes can still be tested locally.
+    try:
+        async with engine.begin() as conn:
+            await conn.run_sync(Base.metadata.create_all)
+    except Exception as exc:
+        print(f"[startup] Database unavailable, continuing without init: {exc}")
 
 @app.get("/")
 def read_root():
