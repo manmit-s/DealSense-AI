@@ -1,1 +1,2 @@
 from .deal_intelligence_agent import analyze_deal, deal_intelligence_graph
+from .competitive_agent import competitive_graph, run_competitive_agent
