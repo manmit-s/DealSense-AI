@@ -3,6 +3,37 @@ from typing import List, Optional
 from datetime import date, datetime
 from uuid import UUID
 
+
+class DealActivityItem(BaseModel):
+    timestamp: datetime
+    subject: str
+    from_name: str
+
+
+class RecoveryEmailDraft(BaseModel):
+    subject: str
+    body: str
+
+
+class RecoveryPlay(BaseModel):
+    diagnosis: str
+    recommended_action: str
+    email_draft: RecoveryEmailDraft
+    talking_points: List[str] = []
+
+
+class DealRiskItem(BaseModel):
+    type: str
+    description: str
+    severity: str = "medium"
+
+
+class DealDetailMeta(BaseModel):
+    risk_items: List[DealRiskItem] = []
+    recovery_play: Optional[RecoveryPlay] = None
+    analysis_run_at: Optional[datetime] = None
+    recent_activity: List[DealActivityItem] = []
+
 class DealBase(BaseModel):
     title: str
     value: float
@@ -24,3 +55,14 @@ class DealResponse(DealBase):
 
 class DealStageUpdate(BaseModel):
     stage: str
+
+
+class DealDetailResponse(DealResponse):
+    analysis: DealDetailMeta = DealDetailMeta()
+
+
+class DealRecoveryResponse(BaseModel):
+    deal_id: UUID
+    health_score: int
+    risk_level: str
+    recovery_play: Optional[RecoveryPlay] = None

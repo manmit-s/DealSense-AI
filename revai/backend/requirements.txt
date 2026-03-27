@@ -11,3 +11,5 @@ bcrypt==3.2.2
 python-jose[cryptography]
 pydantic[email]
 httpx
+apscheduler
+langgraph
