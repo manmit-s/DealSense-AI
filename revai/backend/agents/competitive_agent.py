@@ -8,7 +8,8 @@ from importlib import import_module
 from typing import Any, TypedDict
 from uuid import UUID
 
-import httpx
+from langchain_community.tools.tavily_search import TavilySearchResults
+from langchain_google_genai import ChatGoogleGenerativeAI
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -55,37 +56,32 @@ async def _log(
     await db.flush()
 
 
-async def _serper_search(query: str) -> list[dict[str, str]]:
-    api_key = os.getenv("SERPER_API_KEY")
+async def _tavily_search(query: str) -> list[dict[str, str]]:
+    api_key = os.getenv("TAVILY_API_KEY")
     if not api_key:
         # Local fallback keeps flow usable without external keys.
         return [
             {
-                "title": f"No live SERPER key for query: {query}",
+                "title": f"No live TAVILY key for query: {query}",
                 "snippet": "Using local fallback competitive summary.",
                 "link": "",
             }
         ]
 
-    headers = {"X-API-KEY": api_key, "Content-Type": "application/json"}
-    payload = {"q": query, "num": 5}
-
     try:
-        async with httpx.AsyncClient(timeout=30.0) as client:
-            response = await client.post("https://google.serper.dev/search", headers=headers, json=payload)
-            response.raise_for_status()
-            data = response.json()
+        tool = TavilySearchResults(max_results=5, tavily_api_key=api_key)
+        raw_results = await tool.ainvoke(query)
     except Exception:
         return []
 
-    organic = data.get("organic", []) or []
     return [
         {
             "title": str(item.get("title", "")),
-            "snippet": str(item.get("snippet", "")),
-            "link": str(item.get("link", "")),
+            "snippet": str(item.get("content", item.get("snippet", ""))),
+            "link": str(item.get("url", item.get("link", ""))),
         }
-        for item in organic[:5]
+        for item in (raw_results if isinstance(raw_results, list) else [])[:5]
+        if isinstance(item, dict)
     ]
 
 
@@ -115,34 +111,40 @@ def _extract_json_payload(text: str) -> dict[str, Any] | None:
     return None
 
 
-async def _anthropic_json(system_prompt: str, user_prompt: str) -> dict[str, Any] | None:
-    api_key = os.getenv("ANTHROPIC_API_KEY")
+def _llm_text_from_response(content: Any) -> str:
+    if isinstance(content, str):
+        return content
+    if isinstance(content, list):
+        chunks: list[str] = []
+        for item in content:
+            if isinstance(item, str):
+                chunks.append(item)
+            elif isinstance(item, dict):
+                text = item.get("text")
+                if isinstance(text, str):
+                    chunks.append(text)
+        return "\n".join(chunks)
+    return ""
+
+
+async def _gemini_json(system_prompt: str, user_prompt: str) -> dict[str, Any] | None:
+    api_key = os.getenv("GEMINI_API_KEY")
     if not api_key:
         return None
 
-    payload = {
-        "model": "claude-sonnet-4-20250514",
-        "max_tokens": 1200,
-        "system": system_prompt,
-        "messages": [{"role": "user", "content": user_prompt}],
-    }
-    headers = {
-        "x-api-key": api_key,
-        "anthropic-version": "2023-06-01",
-        "content-type": "application/json",
-    }
-
     try:
-        async with httpx.AsyncClient(timeout=45.0) as client:
-            response = await client.post("https://api.anthropic.com/v1/messages", headers=headers, json=payload)
-            if response.status_code != 200:
-                return None
-            data = response.json()
+        llm = ChatGoogleGenerativeAI(
+            model=os.getenv("GEMINI_MODEL", "gemini-1.5-pro"),
+            temperature=0,
+            google_api_key=api_key,
+        )
+        response = await llm.ainvoke(
+            f"{system_prompt}\n\n{user_prompt}\n\nReturn ONLY valid JSON."
+        )
     except Exception:
         return None
 
-    content = data.get("content", [])
-    text = "\n".join(chunk.get("text", "") for chunk in content if chunk.get("type") == "text")
+    text = _llm_text_from_response(getattr(response, "content", ""))
     return _extract_json_payload(text)
 
 
@@ -161,7 +163,7 @@ async def scrape_competitor(state: CompetitiveState) -> CompetitiveState:
     if domain:
         queries.append(f"{competitor_name} {domain} platform overview")
 
-    results = await asyncio.gather(*[_serper_search(q) for q in queries])
+    results = await asyncio.gather(*[_tavily_search(q) for q in queries])
     merged: list[dict[str, str]] = []
     for chunk in results:
         merged.extend(chunk[:5])
@@ -174,7 +176,7 @@ async def analyze_intel(state: CompetitiveState) -> CompetitiveState:
     competitor_name = state["competitor_name"]
     search_results = state.get("search_results", [])
 
-    llm_response = await _anthropic_json(
+    llm_response = await _gemini_json(
         "You are a competitive intelligence analyst. Extract structured intel from search results. Return ONLY valid JSON.",
         f"""
 Competitor: {competitor_name}
@@ -217,7 +219,7 @@ async def generate_battlecard(state: CompetitiveState) -> CompetitiveState:
     competitor_name = state["competitor_name"]
     intel = state.get("analysis", {})
 
-    llm_response = await _anthropic_json(
+    llm_response = await _gemini_json(
         "You are a sales enablement expert writing battlecards for a SaaS sales team. Return ONLY valid JSON.",
         f"""
 Competitor: {competitor_name}

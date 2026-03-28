@@ -1,10 +1,12 @@
 import os
 import json
 import logging
-from typing import TypedDict, Annotated, List, Optional
+from typing import Any, TypedDict, Annotated, List, Optional
 from langgraph.graph import StateGraph, END
-from langchain_anthropic import ChatAnthropic
+from langchain_community.tools.tavily_search import TavilySearchResults
+from langchain_google_genai import ChatGoogleGenerativeAI
 from langchain_core.messages import SystemMessage, HumanMessage
+from apify_client import ApifyClientAsync
 from sqlalchemy.future import select
 
 # To use async db queries inside the agent
@@ -12,8 +14,6 @@ from database import AsyncSessionLocal
 from models.prospect import Prospect, Sequence
 from models.agent_log import AgentLog
 from pydantic import BaseModel, Field
-
-import httpx
 
 logger = logging.getLogger(__name__)
 
@@ -54,29 +54,27 @@ class ProspectState(TypedDict):
 async def research_company(state: ProspectState):
     """
     Node 1 — research_company
-    Call Serper API: "{company_name} news funding team size"
+    Call Tavily API: "{company_name} news funding team size"
     Parse top 5 results into company summary
     """
     company_name = state["company_name"]
-    serper_api_key = os.getenv("SERPER_API_KEY")
+    tavily_api_key = os.getenv("TAVILY_API_KEY")
     summary = f"Company: {company_name}. No public news or funding data found."
     
-    if serper_api_key:
+    if tavily_api_key:
         try:
-            async with httpx.AsyncClient() as client:
-                response = await client.post(
-                    "https://google.serper.dev/search",
-                    headers={
-                        "X-API-KEY": serper_api_key,
-                        "Content-Type": "application/json"
-                    },
-                    json={"q": f"{company_name} news funding team size", "num": 5}
-                )
-                if response.status_code == 200:
-                    data = response.json()
-                    snippets = [item.get("snippet", "") for item in data.get("organic", [])]
-                    if snippets:
-                        summary = f"Search highlights for {company_name}:\n" + "\n".join(snippets)
+            tool = TavilySearchResults(max_results=5, tavily_api_key=tavily_api_key)
+            results = await tool.ainvoke(f"{company_name} news funding team size")
+
+            snippets: list[str] = []
+            for item in results if isinstance(results, list) else []:
+                if isinstance(item, dict):
+                    text = item.get("content") or item.get("snippet") or ""
+                    if text:
+                        snippets.append(str(text))
+
+            if snippets:
+                summary = f"Search highlights for {company_name}:\n" + "\n".join(snippets[:5])
         except Exception as e:
             logger.error(f"Error researching company: {e}")
 
@@ -86,38 +84,50 @@ async def research_company(state: ProspectState):
 async def enrich_contact(state: ProspectState):
     """
     Node 2 — enrich_contact
-    Simulate Proxycurl/Serper: "{contact_name} {company_name} LinkedIn"
+    Use Apify enrichment/search to gather role and likely pain points
     Extract: role, tenure, likely pain points
     """
     contact_name = state["contact_name"]
     company_name = state["company_name"]
-    serper_api_key = os.getenv("SERPER_API_KEY")
+    apify_api_token = os.getenv("APIFY_API_TOKEN")
     
     # Default mock
     role = "Decision Maker (Simulated)"
     pain_points = "Improving operational efficiency, reducing costs."
 
-    if serper_api_key:
+    if apify_api_token:
         try:
-            async with httpx.AsyncClient() as client:
-                response = await client.post(
-                    "https://google.serper.dev/search",
-                    headers={
-                        "X-API-KEY": serper_api_key,
-                        "Content-Type": "application/json"
-                    },
-                    json={"q": f"{contact_name} {company_name} LinkedIn", "num": 3}
-                )
-                if response.status_code == 200:
-                    data = response.json()
-                    organic = data.get("organic", [])
-                    if organic:
-                        first_result = organic[0]
-                        snippet = first_result.get("snippet", "")
-                        title = first_result.get("title", "")
-                        # Very simple heuristic to extract role from title, or just return the title snippet
-                        role = title.split("-")[0].strip() if "-" in title else title
-                        pain_points = f"Derived from LinkedIn snippet: {snippet}"
+            client = ApifyClientAsync(apify_api_token)
+            run_input = {
+                "queries": f"{contact_name} {company_name} LinkedIn",
+                "maxPagesPerQuery": 1,
+                "resultsPerPage": 5,
+            }
+            run = await client.actor("apify/google-search-scraper").call(run_input=run_input)
+
+            dataset_id = run.get("defaultDatasetId") if isinstance(run, dict) else None
+            if dataset_id:
+                dataset_items = await client.dataset(dataset_id).list_items()
+                items = dataset_items.get("items", []) if isinstance(dataset_items, dict) else []
+
+                organic_results: list[dict[str, Any]] = []
+                for item in items:
+                    if isinstance(item, dict):
+                        organic = item.get("organicResults")
+                        if isinstance(organic, list):
+                            organic_results.extend([x for x in organic if isinstance(x, dict)])
+
+                if organic_results:
+                    first_result = organic_results[0]
+                    snippet = str(
+                        first_result.get("description")
+                        or first_result.get("snippet")
+                        or ""
+                    )
+                    title = str(first_result.get("title") or "")
+                    role = title.split("-")[0].strip() if "-" in title else (title or role)
+                    if snippet:
+                        pain_points = f"Derived from Apify search snippet: {snippet}"
         except Exception as e:
             logger.error(f"Error enriching contact: {e}")
 
@@ -133,8 +143,11 @@ async def score_icp_fit(state: ProspectState):
     Call Claude with ICP config + research summary
     Return: `score` (int 0–100), `fit_signals` (list of strings)
     """
-    # Use ChatAnthropic with structured output if possible, or bind tools
-    llm = ChatAnthropic(model="claude-3-haiku-20240307", temperature=0)
+    llm = ChatGoogleGenerativeAI(
+        model=os.getenv("GEMINI_MODEL", "gemini-1.5-pro"),
+        temperature=0,
+        google_api_key=os.getenv("GEMINI_API_KEY"),
+    )
     structured_llm = llm.with_structured_output(ICPFitResult)
     
     prompt = f"""
@@ -177,7 +190,11 @@ async def generate_sequence(state: ProspectState):
     Call Claude with full prospect context
     Return: 3-step sequence array [{subject, body, delay_days}]
     """
-    llm = ChatAnthropic(model="claude-3-haiku-20240307", temperature=0.7)
+    llm = ChatGoogleGenerativeAI(
+        model=os.getenv("GEMINI_MODEL", "gemini-1.5-pro"),
+        temperature=0.7,
+        google_api_key=os.getenv("GEMINI_API_KEY"),
+    )
     structured_llm = llm.with_structured_output(SequenceResult)
     
     prompt = f"""

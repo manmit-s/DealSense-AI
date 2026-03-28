@@ -13,3 +13,8 @@ pydantic[email]
 httpx
 apscheduler
 langgraph
+langchain-community
+google-generativeai
+langchain-google-genai
+tavily-python
+apify-client
