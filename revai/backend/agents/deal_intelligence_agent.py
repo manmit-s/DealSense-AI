@@ -5,7 +5,7 @@ import os
 from datetime import date
 from typing import Any, TypedDict
 
-import httpx
+from langchain_google_genai import ChatGoogleGenerativeAI
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -157,35 +157,40 @@ def _heuristic_detect_risks(deal: Deal, email_snippets: list[dict[str, Any]]) ->
     return risks
 
 
-async def _anthropic_json(system_prompt: str, user_prompt: str) -> dict[str, Any] | None:
-    api_key = os.getenv("ANTHROPIC_API_KEY")
+def _llm_text_from_response(content: Any) -> str:
+    if isinstance(content, str):
+        return content
+    if isinstance(content, list):
+        chunks: list[str] = []
+        for item in content:
+            if isinstance(item, str):
+                chunks.append(item)
+            elif isinstance(item, dict):
+                text = item.get("text")
+                if isinstance(text, str):
+                    chunks.append(text)
+        return "\n".join(chunks)
+    return ""
+
+
+async def _gemini_json(system_prompt: str, user_prompt: str) -> dict[str, Any] | None:
+    api_key = os.getenv("GEMINI_API_KEY")
     if not api_key:
         return None
 
-    payload = {
-        "model": "claude-sonnet-4-20250514",
-        "max_tokens": 800,
-        "system": system_prompt,
-        "messages": [{"role": "user", "content": user_prompt}],
-    }
-
-    headers = {
-        "x-api-key": api_key,
-        "anthropic-version": "2023-06-01",
-        "content-type": "application/json",
-    }
-
-    async with httpx.AsyncClient(timeout=40.0) as client:
-        response = await client.post("https://api.anthropic.com/v1/messages", headers=headers, json=payload)
-        if response.status_code != 200:
-            return None
-
-    body = response.json()
-    content = body.get("content", [])
-    if not content:
+    try:
+        llm = ChatGoogleGenerativeAI(
+            model=os.getenv("GEMINI_MODEL", "gemini-1.5-pro"),
+            temperature=0,
+            google_api_key=api_key,
+        )
+        response = await llm.ainvoke(
+            f"{system_prompt}\n\n{user_prompt}\n\nReturn ONLY valid JSON."
+        )
+    except Exception:
         return None
 
-    text = "\n".join(chunk.get("text", "") for chunk in content if chunk.get("type") == "text")
+    text = _llm_text_from_response(getattr(response, "content", ""))
     return _extract_json_payload(text)
 
 
@@ -244,7 +249,7 @@ Identify risks. Look for:
 
 Return JSON: {{"risks": [{{"type": "silence|competitor|budget|stakeholder|objection", "description": "...", "severity": "low|medium|high|critical"}}]}}
 """
-    llm_response = await _anthropic_json(system_prompt, user_prompt)
+    llm_response = await _gemini_json(system_prompt, user_prompt)
     llm_risks = (llm_response or {}).get("risks") if llm_response else None
 
     if isinstance(llm_risks, list) and llm_risks:
@@ -306,7 +311,7 @@ Return JSON:
   "talking_points": ["point 1", "point 2", "point 3"]
 }}
 """
-    llm_response = await _anthropic_json(system_prompt, user_prompt)
+    llm_response = await _gemini_json(system_prompt, user_prompt)
 
     if llm_response and all(key in llm_response for key in ["diagnosis", "recommended_action", "email_draft"]):
         state["recovery_play"] = llm_response

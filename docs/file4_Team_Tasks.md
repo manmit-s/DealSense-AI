@@ -655,8 +655,8 @@ Framer Motion scroll reveals on each section.
 
 - Copy `.env.example` → `.env` for the team
 - Obtain and fill in:
-  - `ANTHROPIC_API_KEY` — from Anthropic console
-  - `SERPER_API_KEY` — from serper.dev (free tier available)
+  - `GEMINI_API_KEY` — from Google AI Studio / Gemini API
+  - `TAVILY_API_KEY` — from Tavily (free tier available)
   - `NEXTAUTH_SECRET` — generate with `openssl rand -base64 32`
   - `SLACK_WEBHOOK_URL` — create incoming webhook in team Slack
 - Share `.env` file securely with all team members
